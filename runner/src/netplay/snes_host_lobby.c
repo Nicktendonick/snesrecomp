@@ -58,7 +58,18 @@ static int g_local_address_count;
 static char g_external_ip[RNET_IPV4_ADDRESS_TEXT_MAX];
 static int g_lobby_input_delay = 2; /* waiting-room setting; clamped 2..20 */
 static int g_lobby_force_turn = 0;  /* host: ICE relay-only for server lobbies */
+static int g_lobby_force_input_relay = 0; /* host: server UDP input relay */
+static int g_lobby_max_slots = 2;
 static int g_lan_guest_rtt_ms = -1;
+
+static int clamp_lobby_max_slots(int slots)
+{
+  if (slots < 2)
+    return 2;
+  if (slots > RECOMP_LAUNCHER_NETPLAY_MAX_MEMBERS)
+    return RECOMP_LAUNCHER_NETPLAY_MAX_MEMBERS;
+  return slots;
+}
 
 static int clamp_input_delay(int delay)
 {
@@ -566,10 +577,12 @@ static int cb_external_ip(void *ctx, char *out, size_t out_len)
 
 static int cb_create(void *ctx, const char *lobby_name, char *host_endpoint,
                      const char *password,
-                     const RecompLauncherCSettings *settings, int lan_only)
+                     const RecompLauncherCSettings *settings, int lan_only,
+                     int max_slots)
 {
   SnesLobbyMatchCaps caps = default_caps(settings);
   (void)ctx;
+  g_lobby_max_slots = clamp_lobby_max_slots(max_slots);
   if (!host_endpoint)
     return -1;
   if (!host_endpoint[0])
@@ -590,7 +603,7 @@ static int cb_create(void *ctx, const char *lobby_name, char *host_endpoint,
           ? lobby_name
           : (g_id.default_lobby_name ? g_id.default_lobby_name : "Netplay Lobby"),
       game_name(), game_version(), password ? password : "", host_endpoint,
-      &caps);
+      &caps, g_lobby_max_slots);
 }
 
 static int map_direct_join_rc(int rc)
@@ -868,30 +881,38 @@ static int cb_input_delay_set(void *ctx, int delay_frames)
   return snes_lobby_set_match_caps(&caps);
 }
 
-static int cb_force_turn_get(void *ctx)
+static int cb_force_input_relay_get(void *ctx)
 {
-  const SnesLobbyMatchCaps *caps;
   (void)ctx;
-  if (!g_hosting_lan && !g_joined_lan) {
-    caps = snes_lobby_match_caps();
-    if (caps && caps->valid)
-      return caps->force_turn ? 1 : 0;
-  }
-  return g_lobby_force_turn ? 1 : 0;
+  if (g_hosting_lan || g_joined_lan)
+    return 0;
+  return g_lobby_force_input_relay ? 1 : 0;
 }
 
-static int cb_force_turn_set(void *ctx, int force)
+static int cb_force_input_relay_set(void *ctx, int force)
 {
-  SnesLobbyMatchCaps caps;
   (void)ctx;
-  g_lobby_force_turn = force ? 1 : 0;
   if (g_hosting_lan || g_joined_lan)
-    return 0; /* LAN/Direct IP does not use ICE TURN */
+    return 0; /* LAN/Direct IP does not use server input relay */
   if (!snes_lobby_is_host())
     return -1;
-  caps = default_caps(NULL);
-  caps.force_turn = g_lobby_force_turn;
-  return snes_lobby_set_match_caps(&caps);
+  g_lobby_force_input_relay = force ? 1 : 0;
+  return 0;
+}
+
+static int cb_lobby_max_slots(void *ctx)
+{
+  const SnesLobbyJoinInfo *join;
+  RNetLanLobby state;
+  (void)ctx;
+  if (use_lan_members(&state))
+    return 2;
+  if (!snes_lobby_in_lobby())
+    return 0;
+  join = snes_lobby_join_info();
+  if (join && join->max_slots >= 2)
+    return clamp_lobby_max_slots(join->max_slots);
+  return clamp_lobby_max_slots(g_lobby_max_slots);
 }
 
 static int cb_fill_launch(void *ctx, RecompLauncherCNetplayLaunch *out)
@@ -903,7 +924,9 @@ static int cb_fill_launch(void *ctx, RecompLauncherCNetplayLaunch *out)
     return 0;
   if (g_lan_launch.enabled) {
     *out = g_lan_launch;
-    out->force_turn = 0;
+    out->force_input_relay = 0;
+    out->max_slots = 2;
+    out->player_count = 2;
     return 1;
   }
   if (!snes_lobby_try_fill_launch(&join))
@@ -915,7 +938,10 @@ static int cb_fill_launch(void *ctx, RecompLauncherCNetplayLaunch *out)
   out->input_player = 0;
   out->session_id = join.session_id;
   out->input_delay = caps && caps->valid ? caps->input_delay : 2;
-  out->force_turn = (caps && caps->valid && caps->force_turn) ? 1 : 0;
+  out->force_input_relay = g_lobby_force_input_relay ? 1 : 0;
+  out->max_slots = join.max_slots >= 2 ? clamp_lobby_max_slots(join.max_slots)
+                                       : clamp_lobby_max_slots(g_lobby_max_slots);
+  out->player_count = join.player_count > 0 ? join.player_count : out->max_slots;
   snprintf(out->bind_hostport, sizeof(out->bind_hostport), "%s",
            join.bind_hostport);
   snprintf(out->peer_hostport, sizeof(out->peer_hostport), "%s",
@@ -958,8 +984,9 @@ static RecompLauncherCNetplayCallbacks g_callbacks = {
     cb_clear_last_error,
     cb_input_delay_get,
     cb_input_delay_set,
-    cb_force_turn_get,
-    cb_force_turn_set,
+    cb_force_input_relay_get,
+    cb_force_input_relay_set,
+    cb_lobby_max_slots,
 };
 
 const RecompLauncherCNetplayCallbacks *snes_host_lobby_callbacks(void)
@@ -1053,7 +1080,7 @@ int snes_host_lobby_auto_launch(const char *role, const char *player_name,
 
   if (is_host) {
     char endpoint[64] = "0.0.0.0:7777";
-    if (cb->create(NULL, lobby_name, endpoint, "", &settings, 0) != 0) {
+    if (cb->create(NULL, lobby_name, endpoint, "", &settings, 0, 2) != 0) {
       auto_log(role, "create_failed");
       return -5;
     }
