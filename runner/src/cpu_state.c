@@ -991,7 +991,11 @@ void cpu_state_init(CpuState *cpu, uint8 *ram) {
 
 /* Default empty RAM-routine guard table for games whose generated
  * dispatch_v2.c predates ram-routine AOT emission. Regenerated dispatch
- * provides strong definitions that override these on ELF/Mach-O. */
+ * provides the definitions when SNESRECOMP_EXTERNAL_RAM_ROUTINE_GUARDS is
+ * enabled. GCC/Clang retain weak defaults for older generated projects; MSVC
+ * requires the explicit contract because it has no equivalent strong-override
+ * data-symbol semantics. */
+#if !defined(SNESRECOMP_EXTERNAL_RAM_ROUTINE_GUARDS)
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((weak))
 #endif
@@ -1002,3 +1006,4 @@ const RamRoutineGuard g_ram_routine_guards[] = {
 __attribute__((weak))
 #endif
 const unsigned g_ram_routine_guard_count = 0;
+#endif
