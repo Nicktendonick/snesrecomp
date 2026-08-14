@@ -70,8 +70,21 @@ void WsShadowSetEastKeep(int layer, int tiles);
  * told apart from "history was never consulted" or "consulted and missed". */
 typedef struct WsShadowMarginStat {
   uint64_t westHit, westMiss, eastHit, eastMiss;
+  /* Source selected after a miss. rawFallback is the dangerous case for a
+   * rolling tilemap: the renderer consumed wrapped VRAM because no exact,
+   * folded, or verified-blank source was available. */
+  uint64_t westFold, eastFold;
+  uint64_t westBlank, eastBlank;
+  uint64_t westRawFallback, eastRawFallback;
 } WsShadowMarginStat;
 void WsShadowGetMarginStats(int layer, WsShadowMarginStat *out);
+
+/* Read-only diagnostic lookup in the world-keyed store. This does not alter
+ * hit/miss counters or renderer state. It lets offline route audits compare
+ * the exact tilemap entry served in a margin with the entry later captured
+ * when that same world cell reaches the native viewport. */
+bool WsShadowLookupWorldTile(int layer, uint32_t worldTileX,
+                             uint32_t worldTileY, uint16_t *entry);
 
 /* When set, capture columns east of the 256px view that match any live
  * view column are cleared instead of stored — kills VRAM-wrap / period
