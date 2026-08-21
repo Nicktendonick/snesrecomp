@@ -98,7 +98,20 @@ typedef struct RtlGameInfo {
    * process-lifetime LLE / frame gates do not survive snes_free.
    * Per-title sticky state belongs here (not scattered in main.c). */
   void (*session_reset)(void);
+  /* Optional lower bound for this game's snapshot ABI. The shared SNES
+   * serializer can retain compatibility with an older framework version
+   * while a game's appended host-continuation block cannot. The loader must
+   * reject such a file before mutating any live state. Zero accepts the
+   * framework-wide range. Kept last for source compatibility with older
+   * positional initializers. */
+  uint32_t minimum_save_state_version;
 } RtlGameInfo;
+
+static inline bool RtlGameAcceptsSaveStateVersion(const RtlGameInfo *info,
+                                                  uint32_t version) {
+  return !info || info->minimum_save_state_version == 0 ||
+         version >= info->minimum_save_state_version;
+}
 
 extern const RtlGameInfo *g_rtl_game_info;
 

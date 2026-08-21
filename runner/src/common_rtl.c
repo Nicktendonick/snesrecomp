@@ -592,6 +592,16 @@ bool RtlLoadSnapshot(const char *filename) {
     fclose(f);
     return false;
   }
+  if (!RtlGameAcceptsSaveStateVersion(g_rtl_game_info, hdr[1])) {
+    printf("Save file %s: format v%u is incompatible with %s "
+           "(requires v%u or newer)\n",
+           filename, (unsigned)hdr[1],
+           g_rtl_game_info && g_rtl_game_info->title
+               ? g_rtl_game_info->title : "this game",
+           (unsigned)g_rtl_game_info->minimum_save_state_version);
+    fclose(f);
+    return false;
+  }
   RtlApuLock();
   FileSli fs = { { &file_sli_func }, f, false, false };
   snes_saveload_set_version(hdr[1]);
@@ -642,7 +652,8 @@ bool RtlLoadSnapshotFromMemory(const void *data, size_t size) {
   uint32 hdr[2];
   memcpy(hdr, data, sizeof hdr);
   if (hdr[0] != RTL_SAV_MAGIC || hdr[1] < RTL_SAV_VERSION_MIN ||
-      hdr[1] > RTL_SAV_VERSION)
+      hdr[1] > RTL_SAV_VERSION ||
+      !RtlGameAcceptsSaveStateVersion(g_rtl_game_info, hdr[1]))
     return false;
 
   MemorySli memory = {
